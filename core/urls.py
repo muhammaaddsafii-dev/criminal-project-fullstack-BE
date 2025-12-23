@@ -5,7 +5,7 @@ from .views import (
     DesaViewSet, StatusViewSet, LaporanKejahatanViewSet,
     FotoLaporanKejahatanViewSet, PosKeamananViewSet, FotoPosKeamananViewSet,
     CCTVViewSet, FotoCCTVViewSet, KejadianLainnyaViewSet,
-    FotoKejadianLainnyaViewSet
+    FotoKejadianLainnyaViewSet, statistik_dashboard
 )
 
 router = DefaultRouter()
@@ -25,4 +25,5 @@ router.register(r'foto-kejadian-lainnya', FotoKejadianLainnyaViewSet, basename='
 
 urlpatterns = [
     path('api/', include(router.urls)),
+    path('api/statistik/', statistik_dashboard, name='statistik-dashboard'),
 ]

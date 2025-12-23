@@ -1,7 +1,7 @@
 from rest_framework import viewsets, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
-from django.db.models import Q
+from django.db.models import Q, Count
 from .models import (
     JenisKejahatan, NamaKejahatan, Kecamatan, Desa, Status,
     LaporanKejahatan, FotoLaporanKejahatan, PosKeamanan, FotoPosKeamanan,
@@ -325,3 +325,49 @@ class FotoKejadianLainnyaViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(kejadian_lainnya_id=kejadian_lainnya_id)
         
         return queryset
+
+
+@api_view(['GET'])
+def statistik_dashboard(request):
+    """
+    API endpoint untuk mendapatkan statistik dashboard:
+    - Jumlah Laporan Kejahatan yang sudah diapprove (is_approval = True)
+    - Jumlah Desa
+    - Jumlah Pos Keamanan
+    - Jumlah CCTV
+    """
+    try:
+        # 1. Jumlah Laporan Kejahatan yang diapprove
+        jumlah_laporan_kejahatan_approved = LaporanKejahatan.objects.filter(
+            is_approval=True
+        ).count()
+        
+        # 2. Jumlah Desa
+        jumlah_desa = Desa.objects.count()
+        
+        # 3. Jumlah Pos Keamanan
+        jumlah_pos_keamanan = PosKeamanan.objects.count()
+        
+        # 4. Jumlah CCTV
+        jumlah_cctv = CCTV.objects.count()
+        
+        # Menyusun response data
+        data = {
+            'success': True,
+            'message': 'Statistik berhasil diambil',
+            'data': {
+                'jumlah_laporan_kejahatan_approved': jumlah_laporan_kejahatan_approved,
+                'jumlah_desa': jumlah_desa,
+                'jumlah_pos_keamanan': jumlah_pos_keamanan,
+                'jumlah_cctv': jumlah_cctv
+            }
+        }
+        
+        return Response(data, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        return Response({
+            'success': False,
+            'message': f'Terjadi kesalahan: {str(e)}',
+            'data': None
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
