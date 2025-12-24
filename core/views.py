@@ -15,6 +15,12 @@ from .serializers import (
     FotoKejadianLainnyaSerializer
 )
 
+from django.contrib.gis.geos import GEOSGeometry
+from django.contrib.gis.db.models.functions import AsGeoJSON
+import json
+
+
+
 
 class JenisKejahatanViewSet(viewsets.ModelViewSet):
     """
@@ -371,3 +377,327 @@ def statistik_dashboard(request):
             'message': f'Terjadi kesalahan: {str(e)}',
             'data': None
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+
+
+@api_view(['GET'])
+def map_data(request):
+    """
+    API endpoint untuk mendapatkan semua data peta:
+    - Areas (polygon dengan warna berbeda)
+    - Laporan Kejahatan (markers)
+    - Pos Keamanan (markers)
+    - CCTV (markers)
+    """
+    try:
+        # 1. Ambil data Areas dengan geometry
+        from .models import Area
+        areas = Area.objects.select_related('kecamatan', 'desa').all()
+        
+        # Generate warna untuk setiap area
+        colors = [
+            '#ef4444',  # red
+            '#f59e0b',  # amber
+            '#10b981',  # emerald
+            '#3b82f6',  # blue
+            '#8b5cf6',  # violet
+            '#ec4899',  # pink
+            '#14b8a6',  # teal
+            '#f97316',  # orange
+        ]
+        
+        # Konversi areas ke GeoJSON
+        area_features = []
+        for idx, area in enumerate(areas):
+            if area.geom:
+                feature = {
+                    'type': 'Feature',
+                    'id': area.id,
+                    'properties': {
+                        'id': area.id,
+                        'name': area.wadmkd or area.desa.nama,
+                        'kecamatan': area.kecamatan.nama,
+                        'desa': area.desa.nama,
+                        'luas': float(area.luas) if area.luas else 0,
+                        'color': colors[idx % len(colors)],
+                    },
+                    'geometry': json.loads(area.geom.geojson)
+                }
+                area_features.append(feature)
+        
+        areas_geojson = {
+            'type': 'FeatureCollection',
+            'features': area_features
+        }
+        
+        # 2. Ambil Laporan Kejahatan yang sudah di-approve
+        from .models import LaporanKejahatan
+        laporan_kejahatan = LaporanKejahatan.objects.filter(
+            is_approval=True,
+            lokasi__isnull=False
+        ).select_related(
+            'jenis_kejahatan', 'nama_kejahatan', 'kecamatan', 'desa', 'status'
+        ).prefetch_related('foto')
+        
+        crime_markers = []
+        for laporan in laporan_kejahatan:
+            if laporan.lokasi:
+                crime_markers.append({
+                    'id': laporan.id,
+                    'type': 'crime',
+                    'name': laporan.nama_kejahatan.nama,
+                    'jenis': laporan.jenis_kejahatan.nama_jenis_kejahatan,
+                    'latitude': laporan.lokasi.y,
+                    'longitude': laporan.lokasi.x,
+                    'address': laporan.alamat,
+                    'description': laporan.deskripsi,
+                    'date': str(laporan.tanggal_kejadian),
+                    'time': str(laporan.waktu_kejadian),
+                    'status': laporan.status.nama,
+                    'kecamatan': laporan.kecamatan.nama,
+                    'desa': laporan.desa.nama,
+                    'pelapor': laporan.nama_pelapor,
+                    'photos': [foto.file_path.url for foto in laporan.foto.all()]
+                })
+        
+        # 3. Ambil Pos Keamanan
+        from .models import PosKeamanan
+        pos_keamanan = PosKeamanan.objects.filter(
+            lokasi__isnull=False
+        ).select_related('desa__kecamatan').prefetch_related('foto')
+        
+        security_markers = []
+        for pos in pos_keamanan:
+            if pos.lokasi:
+                security_markers.append({
+                    'id': pos.id,
+                    'type': 'security_post',
+                    'name': pos.nama,
+                    'latitude': pos.lokasi.y,
+                    'longitude': pos.lokasi.x,
+                    'address': pos.alamat,
+                    'description': pos.keterangan or '',
+                    'kecamatan': pos.desa.kecamatan.nama,
+                    'desa': pos.desa.nama,
+                    'photos': [foto.file_path.url for foto in pos.foto.all()]
+                })
+        
+        # 4. Ambil CCTV
+        from .models import CCTV
+        cctv_list = CCTV.objects.filter(
+            lokasi__isnull=False
+        ).select_related('kecamatan', 'desa').prefetch_related('foto')
+        
+        cctv_markers = []
+        for cctv in cctv_list:
+            if cctv.lokasi:
+                cctv_markers.append({
+                    'id': cctv.id,
+                    'type': 'cctv',
+                    'name': cctv.nama_lokasi,
+                    'latitude': cctv.lokasi.y,
+                    'longitude': cctv.lokasi.x,
+                    'description': cctv.deskripsi or '',
+                    'url_cctv': cctv.url_cctv or '',
+                    'kecamatan': cctv.kecamatan.nama,
+                    'desa': cctv.desa.nama,
+                    'photos': [foto.file_path.url for foto in cctv.foto.all()]
+                })
+        
+        # Response data
+        data = {
+            'success': True,
+            'message': 'Data peta berhasil diambil',
+            'data': {
+                'areas': areas_geojson,
+                'crime_reports': crime_markers,
+                'security_posts': security_markers,
+                'cctvs': cctv_markers,
+                'summary': {
+                    'total_areas': len(area_features),
+                    'total_crime_reports': len(crime_markers),
+                    'total_security_posts': len(security_markers),
+                    'total_cctvs': len(cctv_markers),
+                }
+            }
+        }
+        
+        return Response(data, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        return Response({
+            'success': False,
+            'message': f'Terjadi kesalahan: {str(e)}',
+            'data': None
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+def area_statistics(request, area_id=None):
+    """
+    API endpoint untuk mendapatkan statistik area tertentu
+    """
+    try:
+        from .models import Area, LaporanKejahatan, PosKeamanan, CCTV
+        from django.contrib.gis.geos import GEOSGeometry
+        
+        if area_id:
+            # Statistik untuk area spesifik
+            area = Area.objects.get(id=area_id)
+            
+            # Hitung laporan kejahatan dalam area
+            # Menggunakan spatial query untuk cek point dalam polygon
+            crime_in_area = LaporanKejahatan.objects.filter(
+                is_approval=True,
+                lokasi__isnull=False,
+                lokasi__within=area.geom
+            ).select_related('jenis_kejahatan', 'nama_kejahatan', 'status')
+            
+            # Hitung pos keamanan dalam area
+            security_in_area = PosKeamanan.objects.filter(
+                lokasi__isnull=False,
+                lokasi__within=area.geom
+            )
+            
+            # Hitung CCTV dalam area
+            cctv_in_area = CCTV.objects.filter(
+                lokasi__isnull=False,
+                lokasi__within=area.geom
+            )
+            
+            # Statistik berdasarkan jenis kejahatan
+            crime_by_type = crime_in_area.values(
+                'jenis_kejahatan__nama_jenis_kejahatan'
+            ).annotate(
+                count=Count('id')
+            ).order_by('-count')
+            
+            # Statistik berdasarkan status
+            crime_by_status = crime_in_area.values(
+                'status__nama'
+            ).annotate(
+                count=Count('id')
+            )
+            
+            # Format data untuk chart
+            by_type = [
+                {
+                    'name': item['jenis_kejahatan__nama_jenis_kejahatan'],
+                    'value': item['count']
+                }
+                for item in crime_by_type
+            ]
+            
+            solved = crime_by_status.filter(status__nama='Selesai').first()
+            pending = crime_by_status.exclude(status__nama='Selesai').aggregate(
+                total=Count('id')
+            )
+            
+            # Recent cases
+            recent_cases = []
+            for crime in crime_in_area.order_by('-created_at')[:10]:
+                recent_cases.append({
+                    'id': crime.id,
+                    'type': crime.nama_kejahatan.nama,
+                    'location': crime.alamat,
+                    'date': str(crime.tanggal_kejadian),
+                    'status': crime.status.nama
+                })
+            
+            # Monthly trend (simulasi - sesuaikan dengan kebutuhan)
+            from django.db.models.functions import TruncMonth
+            monthly_data = crime_in_area.annotate(
+                month=TruncMonth('tanggal_kejadian')
+            ).values('month').annotate(
+                cases=Count('id')
+            ).order_by('month')
+            
+            monthly_trend = [
+                {
+                    'month': item['month'].strftime('%b'),
+                    'cases': item['cases']
+                }
+                for item in monthly_data
+            ]
+            
+            statistics = {
+                'area_info': {
+                    'id': area.id,
+                    'name': area.wadmkd or area.desa.nama,
+                    'kecamatan': area.kecamatan.nama,
+                    'desa': area.desa.nama,
+                    'luas': float(area.luas) if area.luas else 0,
+                },
+                'crime_stats': {
+                    'totalCases': crime_in_area.count(),
+                    'solved': solved['count'] if solved else 0,
+                    'pending': pending['total'] or 0,
+                    'byType': by_type,
+                    'recentCases': recent_cases,
+                    'monthlyTrend': monthly_trend
+                },
+                'infrastructure': {
+                    'security_posts': security_in_area.count(),
+                    'cctvs': cctv_in_area.count()
+                }
+            }
+            
+            return Response({
+                'success': True,
+                'message': 'Statistik area berhasil diambil',
+                'data': statistics
+            }, status=status.HTTP_200_OK)
+        
+        else:
+            # Statistik semua area
+            areas = Area.objects.all()
+            area_stats = []
+            
+            for area in areas:
+                crime_count = LaporanKejahatan.objects.filter(
+                    is_approval=True,
+                    lokasi__isnull=False,
+                    lokasi__within=area.geom
+                ).count()
+                
+                area_stats.append({
+                    'id': area.id,
+                    'name': area.wadmkd or area.desa.nama,
+                    'crime_count': crime_count,
+                })
+            
+            return Response({
+                'success': True,
+                'message': 'Statistik semua area berhasil diambil',
+                'data': area_stats
+            }, status=status.HTTP_200_OK)
+    
+    except Area.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': 'Area tidak ditemukan',
+            'data': None
+        }, status=status.HTTP_404_NOT_FOUND)
+    
+    except Exception as e:
+        return Response({
+            'success': False,
+            'message': f'Terjadi kesalahan: {str(e)}',
+            'data': None
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AreaViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet untuk CRUD Area (Read-only karena managed=False)
+    """
+    from .models import Area
+    from .serializers import AreaSerializer
+    
+    queryset = Area.objects.select_related('kecamatan', 'desa').all()
+    serializer_class = AreaSerializer
+    
+    @action(detail=True, methods=['get'])
+    def statistics(self, request, pk=None):
+        """Endpoint untuk mendapatkan statistik area"""
+        return area_statistics(request, area_id=pk)

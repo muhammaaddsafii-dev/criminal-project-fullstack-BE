@@ -309,3 +309,38 @@ class FotoKejadianLainnya(models.Model):
 
     def __str__(self):
         return f"Foto {self.kejadian_lainnya.nama_kejadian} - {self.file_name}"
+    
+
+class Area(models.Model):
+    """Model untuk area/wilayah dengan geometry polygon"""
+    external_id = models.CharField(max_length=255, unique=True, null=True, blank=True)
+    metadata = models.TextField(blank=True, null=True)
+    srs_id = models.CharField(max_length=100, blank=True, null=True)
+    wadmkc = models.CharField(max_length=255, blank=True, null=True)
+    wadmkd = models.CharField(max_length=255, blank=True, null=True)
+    wadmkk = models.CharField(max_length=255, blank=True, null=True)
+    wadmpr = models.CharField(max_length=255, blank=True, null=True)
+    uupp = models.CharField(max_length=255, blank=True, null=True)
+    luas = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    kecamatan = models.ForeignKey(
+        'Kecamatan',
+        on_delete=models.RESTRICT,
+        related_name='areas'
+    )
+    desa = models.ForeignKey(
+        'Desa',
+        on_delete=models.RESTRICT,
+        related_name='areas'
+    )
+    geom = gis_models.GeometryField(srid=4326, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'areas'
+        managed = False  # Karena tabel sudah dibuat manual
+        verbose_name = 'Area'
+        verbose_name_plural = 'Areas'
+
+    def __str__(self):
+        return f"{self.wadmkd or 'Area'} - {self.desa.nama if self.desa else ''}"
