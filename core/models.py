@@ -1,7 +1,7 @@
 from django.contrib.gis.db import models as gis_models
 from django.db import models
 from django.utils import timezone
-
+from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 
 class JenisKejahatan(models.Model):
     """Model untuk jenis kejahatan"""
@@ -344,3 +344,92 @@ class Area(models.Model):
 
     def __str__(self):
         return f"{self.wadmkd or 'Area'} - {self.desa.nama if self.desa else ''}"
+    
+
+class CustomUserManager(BaseUserManager):
+    """Manager untuk custom user model"""
+    
+    def create_user(self, username, email, password=None, **extra_fields):
+        if not username:
+            raise ValueError('Username harus diisi')
+        if not email:
+            raise ValueError('Email harus diisi')
+        
+        email = self.normalize_email(email)
+        user = self.model(username=username, email=email, **extra_fields)
+        user.set_password(password)
+        user.save(using=self._db)
+        return user
+    
+    def create_superuser(self, username, email, password=None, **extra_fields):
+        extra_fields.setdefault('is_staff', True)
+        extra_fields.setdefault('is_superuser', True)
+        extra_fields.setdefault('is_active', True)
+        
+        if extra_fields.get('is_staff') is not True:
+            raise ValueError('Superuser harus memiliki is_staff=True')
+        if extra_fields.get('is_superuser') is not True:
+            raise ValueError('Superuser harus memiliki is_superuser=True')
+        
+        return self.create_user(username, email, password, **extra_fields)
+
+
+class User(AbstractBaseUser, PermissionsMixin):
+    """Custom User Model"""
+    
+    JABATAN_CHOICES = [
+        ('admin', 'Administrator'),
+        ('operator', 'Operator'),
+        ('viewer', 'Viewer'),
+        ('petugas', 'Petugas Keamanan'),
+    ]
+    
+    username = models.CharField(max_length=150, unique=True)
+    email = models.EmailField(unique=True)
+    name = models.CharField(max_length=255)
+    jabatan = models.CharField(max_length=50, choices=JABATAN_CHOICES, default='viewer')
+    
+    is_active = models.BooleanField(default=True)
+    is_staff = models.BooleanField(default=False)
+    is_superuser = models.BooleanField(default=False)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    # FIX: Tambahkan related_name untuk menghindari clash
+    groups = models.ManyToManyField(
+        'auth.Group',
+        verbose_name='groups',
+        blank=True,
+        help_text='The groups this user belongs to.',
+        related_name='custom_user_set',  # ← PERBAIKAN DI SINI
+        related_query_name='custom_user',
+    )
+    user_permissions = models.ManyToManyField(
+        'auth.Permission',
+        verbose_name='user permissions',
+        blank=True,
+        help_text='Specific permissions for this user.',
+        related_name='custom_user_set',  # ← PERBAIKAN DI SINI
+        related_query_name='custom_user',
+    )
+    
+    objects = CustomUserManager()
+    
+    USERNAME_FIELD = 'username'
+    REQUIRED_FIELDS = ['email', 'name']
+    
+    class Meta:
+        db_table = 'users'
+        verbose_name = 'User'
+        verbose_name_plural = 'Users'
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.username} - {self.name}"
+    
+    def get_full_name(self):
+        return self.name
+    
+    def get_short_name(self):
+        return self.username

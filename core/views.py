@@ -1,28 +1,35 @@
-from rest_framework import viewsets, status
-from rest_framework.decorators import action, api_view
+from rest_framework import viewsets, status, permissions
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from django.db.models import Q, Count
 from .models import (
     JenisKejahatan, NamaKejahatan, Kecamatan, Desa, Status,
     LaporanKejahatan, FotoLaporanKejahatan, PosKeamanan, FotoPosKeamanan,
-    CCTV, FotoCCTV, KejadianLainnya, FotoKejadianLainnya
+    CCTV, FotoCCTV, KejadianLainnya, FotoKejadianLainnya, User
 )
 from .serializers import (
     JenisKejahatanSerializer, NamaKejahatanSerializer, KecamatanSerializer,
     DesaSerializer, StatusSerializer, LaporanKejahatanSerializer,
     FotoLaporanKejahatanSerializer, PosKeamananSerializer, FotoPosKeamananSerializer,
     CCTVSerializer, FotoCCTVSerializer, KejadianLainnyaSerializer,
-    FotoKejadianLainnyaSerializer
+    FotoKejadianLainnyaSerializer, UserSerializer, UserCreateSerializer, UserUpdateSerializer,
+    LoginSerializer, ChangePasswordSerializer
 )
 
 from django.contrib.gis.geos import GEOSGeometry
 from django.contrib.gis.db.models.functions import AsGeoJSON
 import json
+from rest_framework.authtoken.models import Token
+from django.contrib.auth import login, logout
+from django.views.decorators.csrf import csrf_exempt
+from django.db import models
+from rest_framework import permissions 
 
 
 
 
 class JenisKejahatanViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.AllowAny]
     """
     ViewSet untuk CRUD Jenis Kejahatan
     """
@@ -41,6 +48,7 @@ class JenisKejahatanViewSet(viewsets.ModelViewSet):
 
 
 class NamaKejahatanViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.AllowAny]
     """
     ViewSet untuk CRUD Nama Kejahatan
     """
@@ -64,6 +72,7 @@ class NamaKejahatanViewSet(viewsets.ModelViewSet):
 
 
 class KecamatanViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.AllowAny]
     """
     ViewSet untuk CRUD Kecamatan
     """
@@ -82,6 +91,7 @@ class KecamatanViewSet(viewsets.ModelViewSet):
 
 
 class DesaViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.AllowAny]
     """
     ViewSet untuk CRUD Desa
     """
@@ -105,6 +115,7 @@ class DesaViewSet(viewsets.ModelViewSet):
 
 
 class StatusViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.AllowAny]
     """
     ViewSet untuk CRUD Status
     """
@@ -113,6 +124,7 @@ class StatusViewSet(viewsets.ModelViewSet):
 
 
 class LaporanKejahatanViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.AllowAny]
     """
     ViewSet untuk CRUD Laporan Kejahatan
     """
@@ -167,6 +179,7 @@ class LaporanKejahatanViewSet(viewsets.ModelViewSet):
 
 
 class FotoLaporanKejahatanViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.AllowAny]
     """
     ViewSet untuk CRUD Foto Laporan Kejahatan
     """
@@ -184,6 +197,7 @@ class FotoLaporanKejahatanViewSet(viewsets.ModelViewSet):
 
 
 class PosKeamananViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.AllowAny]
     """
     ViewSet untuk CRUD Pos Keamanan
     """
@@ -209,6 +223,7 @@ class PosKeamananViewSet(viewsets.ModelViewSet):
 
 
 class FotoPosKeamananViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.AllowAny]
     """
     ViewSet untuk CRUD Foto Pos Keamanan
     """
@@ -226,6 +241,7 @@ class FotoPosKeamananViewSet(viewsets.ModelViewSet):
 
 
 class CCTVViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.AllowAny]
     """
     ViewSet untuk CRUD CCTV
     """
@@ -253,6 +269,7 @@ class CCTVViewSet(viewsets.ModelViewSet):
 
 
 class FotoCCTVViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.AllowAny]
     """
     ViewSet untuk CRUD Foto CCTV
     """
@@ -270,6 +287,7 @@ class FotoCCTVViewSet(viewsets.ModelViewSet):
 
 
 class KejadianLainnyaViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.AllowAny]
     """
     ViewSet untuk CRUD Kejadian Lainnya
     """
@@ -317,6 +335,7 @@ class KejadianLainnyaViewSet(viewsets.ModelViewSet):
 
 
 class FotoKejadianLainnyaViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.AllowAny]
     """
     ViewSet untuk CRUD Foto Kejadian Lainnya
     """
@@ -701,3 +720,241 @@ class AreaViewSet(viewsets.ReadOnlyModelViewSet):
     def statistics(self, request, pk=None):
         """Endpoint untuk mendapatkan statistik area"""
         return area_statistics(request, area_id=pk)
+    
+
+
+
+class IsAdminOrReadOnly(permissions.BasePermission):
+    """
+    Permission kustom: Admin bisa semua, user lain hanya read
+    """
+    def has_permission(self, request, view):
+        if request.method in permissions.SAFE_METHODS:
+            return request.user and request.user.is_authenticated
+        return request.user and request.user.is_authenticated and request.user.jabatan == 'admin'
+
+
+class UserViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet untuk CRUD User
+    """
+    queryset = User.objects.all()
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrReadOnly]
+    
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return UserCreateSerializer
+        elif self.action in ['update', 'partial_update']:
+            return UserUpdateSerializer
+        return UserSerializer
+    
+    def get_queryset(self):
+        queryset = User.objects.all()
+        
+        # Filter berdasarkan status
+        is_active = self.request.query_params.get('is_active', None)
+        if is_active is not None:
+            queryset = queryset.filter(is_active=is_active.lower() == 'true')
+        
+        # Filter berdasarkan jabatan
+        jabatan = self.request.query_params.get('jabatan', None)
+        if jabatan:
+            queryset = queryset.filter(jabatan=jabatan)
+        
+        # Search
+        search = self.request.query_params.get('search', None)
+        if search:
+            queryset = queryset.filter(
+                models.Q(username__icontains=search) |
+                models.Q(name__icontains=search) |
+                models.Q(email__icontains=search)
+            )
+        
+        return queryset.order_by('-created_at')
+    
+    @action(detail=True, methods=['post'])
+    def change_password(self, request, pk=None):
+        """Endpoint untuk ganti password user tertentu (admin only)"""
+        user = self.get_object()
+        
+        if request.user.jabatan != 'admin' and request.user.id != user.id:
+            return Response(
+                {'error': 'Anda tidak memiliki akses'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        serializer = ChangePasswordSerializer(
+            data=request.data,
+            context={'request': request}
+        )
+        
+        if serializer.is_valid():
+            serializer.save()
+            return Response({'message': 'Password berhasil diubah'})
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'])
+    def toggle_status(self, request, pk=None):
+        """Toggle status aktif/nonaktif user"""
+        user = self.get_object()
+        user.is_active = not user.is_active
+        user.save()
+        
+        return Response({
+            'message': f"User {'diaktifkan' if user.is_active else 'dinonaktifkan'}",
+            'is_active': user.is_active
+        })
+
+
+@csrf_exempt  # ← TAMBAHKAN INI untuk bypass CSRF check pada login
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def login_view(request):
+    """
+    Login endpoint
+    POST /api/auth/login/
+    Body: { "username": "admin", "password": "admin123" }
+    
+    Returns:
+    {
+        "token": "9944b09199c62bcf9418ad846dd0e4bbdfc6ee4b",
+        "user": {
+            "id": 1,
+            "username": "admin",
+            "email": "admin@kriminalitas.com",
+            "name": "Administrator",
+            "jabatan": "admin"
+        },
+        "message": "Login berhasil"
+    }
+    """
+    try:
+        # Log request untuk debugging
+        print(f"Login attempt - Username: {request.data.get('username')}")
+        
+        serializer = LoginSerializer(data=request.data)
+        
+        if serializer.is_valid():
+            user = serializer.validated_data['user']
+            
+            # Hapus token lama jika ada
+            Token.objects.filter(user=user).delete()
+            
+            # Buat token baru
+            token = Token.objects.create(user=user)
+            
+            # OPTIONAL: Login user untuk session (tidak diperlukan untuk token auth)
+            # login(request, user)
+            
+            print(f"Login successful - User: {user.username}")
+            
+            return Response({
+                'token': token.key,
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email,
+                    'name': user.name,
+                    'jabatan': user.jabatan,
+                },
+                'message': 'Login berhasil'
+            }, status=status.HTTP_200_OK)
+        
+        # Invalid credentials
+        print(f"Login failed - Errors: {serializer.errors}")
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+    except Exception as e:
+        # Catch any unexpected errors
+        print(f"Login error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        return Response({
+            'error': 'Terjadi kesalahan server',
+            'detail': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@csrf_exempt  # ← TAMBAHKAN INI juga untuk logout
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def logout_view(request):
+    """
+    Logout endpoint
+    POST /api/auth/logout/
+    Headers: Authorization: Token <token>
+    """
+    try:
+        # Hapus token
+        request.user.auth_token.delete()
+        logout(request)
+        return Response({'message': 'Logout berhasil'})
+    except Exception as e:
+        print(f"Logout error: {str(e)}")
+        return Response(
+            {'error': 'Logout gagal', 'detail': str(e)}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def current_user(request):
+    """
+    Get current logged in user
+    GET /api/auth/me/
+    Headers: Authorization: Token <token>
+    """
+    serializer = UserSerializer(request.user)
+    return Response(serializer.data)
+
+
+@api_view(['PUT'])
+@permission_classes([permissions.IsAuthenticated])
+def update_profile(request):
+    """
+    Update current user profile
+    PUT /api/auth/profile/
+    Headers: Authorization: Token <token>
+    """
+    serializer = UserUpdateSerializer(
+        request.user, 
+        data=request.data, 
+        partial=True
+    )
+    
+    if serializer.is_valid():
+        serializer.save()
+        return Response({
+            'user': UserSerializer(request.user).data,
+            'message': 'Profile berhasil diupdate'
+        })
+    
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def change_password_view(request):
+    """
+    Change password for current user
+    POST /api/auth/change-password/
+    Headers: Authorization: Token <token>
+    Body: {
+        "old_password": "old",
+        "new_password": "new",
+        "new_password_confirm": "new"
+    }
+    """
+    serializer = ChangePasswordSerializer(
+        data=request.data,
+        context={'request': request}
+    )
+    
+    if serializer.is_valid():
+        serializer.save()
+        return Response({'message': 'Password berhasil diubah'})
+    
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

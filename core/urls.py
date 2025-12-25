@@ -7,8 +7,13 @@ from .views import (
     CCTVViewSet, FotoCCTVViewSet, KejadianLainnyaViewSet,
     FotoKejadianLainnyaViewSet, statistik_dashboard,
     # Import view baru untuk map
-    AreaViewSet, map_data, area_statistics
+    AreaViewSet, map_data, area_statistics,
+
+     # Authentication views
+    UserViewSet, login_view, logout_view, current_user,
+    update_profile, change_password_view
 )
+
 
 router = DefaultRouter()
 router.register(r'jenis-kejahatan', JenisKejahatanViewSet, basename='jenis-kejahatan')
@@ -26,11 +31,38 @@ router.register(r'kejadian-lainnya', KejadianLainnyaViewSet, basename='kejadian-
 router.register(r'foto-kejadian-lainnya', FotoKejadianLainnyaViewSet, basename='foto-kejadian-lainnya')
 router.register(r'areas', AreaViewSet, basename='areas')
 
+# Authentication routes
+router.register(r'users', UserViewSet, basename='users')
+
+# urlpatterns = [
+#     path('api/', include(router.urls)),
+#     path('api/statistik/', statistik_dashboard, name='statistik-dashboard'),
+#     # Endpoint baru untuk map
+#     path('api/map/data/', map_data, name='map-data'),
+#     path('api/map/area-statistics/', area_statistics, name='area-statistics-all'),
+#     path('api/map/area-statistics/<int:area_id>/', area_statistics, name='area-statistics-detail'),
+
+#     # Authentication endpoints
+#     path('api/auth/login/', login_view, name='login'),
+#     path('api/auth/logout/', logout_view, name='logout'),
+#     path('api/auth/me/', current_user, name='current-user'),
+#     path('api/auth/profile/', update_profile, name='update-profile'),
+#     path('api/auth/change-password/', change_password_view, name='change-password'),
+# ]
+
 urlpatterns = [
-    path('api/', include(router.urls)),
-    path('api/statistik/', statistik_dashboard, name='statistik-dashboard'),
+    path('', include(router.urls)),
+    path('statistik/', statistik_dashboard, name='statistik-dashboard'),
     # Endpoint baru untuk map
-    path('api/map/data/', map_data, name='map-data'),
-    path('api/map/area-statistics/', area_statistics, name='area-statistics-all'),
-    path('api/map/area-statistics/<int:area_id>/', area_statistics, name='area-statistics-detail'),
+    path('map/data/', map_data, name='map-data'),
+    path('map/area-statistics/', area_statistics, name='area-statistics-all'),
+    path('map/area-statistics/<int:area_id>/', area_statistics, name='area-statistics-detail'),
+
+    # Authentication endpoints
+    path('auth/login/', login_view, name='login'),
+    path('auth/logout/', logout_view, name='logout'),
+    path('auth/me/', current_user, name='current-user'),
+    path('auth/profile/', update_profile, name='update-profile'),
+    path('auth/change-password/', change_password_view, name='change-password'),
 ]
+

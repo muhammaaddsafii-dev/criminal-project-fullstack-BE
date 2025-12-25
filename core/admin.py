@@ -2,8 +2,11 @@ from django.contrib import admin
 from .models import (
     JenisKejahatan, NamaKejahatan, Kecamatan, Desa, Status,
     LaporanKejahatan, FotoLaporanKejahatan, PosKeamanan, FotoPosKeamanan,
-    CCTV, FotoCCTV, KejadianLainnya, FotoKejadianLainnya
+    CCTV, FotoCCTV, KejadianLainnya, FotoKejadianLainnya, User
 )
+
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+
 
 
 @admin.register(JenisKejahatan)
@@ -127,3 +130,27 @@ class FotoKejadianLainnyaAdmin(admin.ModelAdmin):
     list_display = ('id', 'kejadian_lainnya', 'file_name', 'created_at')
     search_fields = ('file_name',)
     list_filter = ('created_at',)
+
+
+@admin.register(User)
+class UserAdmin(BaseUserAdmin):
+    list_display = ('username', 'email', 'name', 'jabatan', 'is_active', 'is_staff', 'created_at')
+    list_filter = ('jabatan', 'is_active', 'is_staff', 'created_at')
+    search_fields = ('username', 'email', 'name')
+    ordering = ('-created_at',)
+    
+    fieldsets = (
+        (None, {'fields': ('username', 'password')}),
+        ('Informasi Personal', {'fields': ('name', 'email', 'jabatan')}),
+        ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
+        ('Tanggal Penting', {'fields': ('created_at', 'updated_at')}),
+    )
+    
+    add_fieldsets = (
+        (None, {
+            'classes': ('wide',),
+            'fields': ('username', 'email', 'name', 'jabatan', 'password1', 'password2', 'is_active', 'is_staff'),
+        }),
+    )
+    
+    readonly_fields = ('created_at', 'updated_at')

@@ -2,11 +2,12 @@ from rest_framework import serializers
 from .models import (
     JenisKejahatan, NamaKejahatan, Kecamatan, Desa, Status,
     LaporanKejahatan, FotoLaporanKejahatan, PosKeamanan, FotoPosKeamanan,
-    CCTV, FotoCCTV, KejadianLainnya, FotoKejadianLainnya, Area
+    CCTV, FotoCCTV, KejadianLainnya, FotoKejadianLainnya, Area, User
 )
 
 from django.contrib.gis.geos import GEOSGeometry
 import json
+from django.contrib.auth import authenticate
 
 
 class JenisKejahatanSerializer(serializers.ModelSerializer):
@@ -406,3 +407,103 @@ class CCTVMapSerializer(serializers.ModelSerializer):
             return [foto.file_path.url for foto in obj.foto.all()]
         except:
             return []
+        
+
+class UserSerializer(serializers.ModelSerializer):
+    """Serializer untuk User model"""
+    
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'email', 'name', 'jabatan', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class UserCreateSerializer(serializers.ModelSerializer):
+    """Serializer untuk membuat user baru"""
+    password = serializers.CharField(write_only=True, min_length=8)
+    password_confirm = serializers.CharField(write_only=True, min_length=8)
+    
+    class Meta:
+        model = User
+        fields = ['username', 'email', 'name', 'jabatan', 'password', 'password_confirm', 'is_active']
+    
+    def validate(self, data):
+        if data['password'] != data['password_confirm']:
+            raise serializers.ValidationError({"password": "Password tidak cocok"})
+        return data
+    
+    def create(self, validated_data):
+        validated_data.pop('password_confirm')
+        password = validated_data.pop('password')
+        user = User.objects.create_user(password=password, **validated_data)
+        return user
+
+
+class UserUpdateSerializer(serializers.ModelSerializer):
+    """Serializer untuk update user"""
+    password = serializers.CharField(write_only=True, required=False, min_length=8, allow_blank=True)
+    
+    class Meta:
+        model = User
+        fields = ['username', 'email', 'name', 'jabatan', 'is_active', 'password']
+    
+    def update(self, instance, validated_data):
+        password = validated_data.pop('password', None)
+        
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        if password:
+            instance.set_password(password)
+        
+        instance.save()
+        return instance
+
+
+class LoginSerializer(serializers.Serializer):
+    """Serializer untuk login"""
+    username = serializers.CharField()
+    password = serializers.CharField(write_only=True)
+    
+    def validate(self, data):
+        username = data.get('username')
+        password = data.get('password')
+        
+        if username and password:
+            user = authenticate(username=username, password=password)
+            
+            if not user:
+                raise serializers.ValidationError('Username atau password salah')
+            
+            if not user.is_active:
+                raise serializers.ValidationError('Akun tidak aktif')
+            
+            data['user'] = user
+        else:
+            raise serializers.ValidationError('Username dan password harus diisi')
+        
+        return data
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    """Serializer untuk ganti password"""
+    old_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True, min_length=8)
+    new_password_confirm = serializers.CharField(write_only=True, min_length=8)
+    
+    def validate_old_password(self, value):
+        user = self.context['request'].user
+        if not user.check_password(value):
+            raise serializers.ValidationError('Password lama salah')
+        return value
+    
+    def validate(self, data):
+        if data['new_password'] != data['new_password_confirm']:
+            raise serializers.ValidationError({"new_password": "Password baru tidak cocok"})
+        return data
+    
+    def save(self):
+        user = self.context['request'].user
+        user.set_password(self.validated_data['new_password'])
+        user.save()
+        return user

@@ -43,6 +43,15 @@ INSTALLED_APPS = [
     'corsheaders',
     'core',
     'storages',
+    'rest_framework.authtoken',  # Tambahkan ini,
+]
+
+# Custom User Model
+AUTH_USER_MODEL = 'core.User'
+
+# Authentication Backends
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
 ]
 
 MIDDLEWARE = [
@@ -138,6 +147,17 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # REST Framework settings
 REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        # Comment ini agar login endpoint bisa diakses tanpa auth
+        # 'rest_framework.permissions.IsAuthenticated',
+    ],
+
+    'EXCEPTION_HANDLER': 'rest_framework.views.exception_handler',
+
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 10,
     'DEFAULT_RENDERER_CLASSES': [
@@ -148,6 +168,14 @@ REST_FRAMEWORK = {
 
 # CORS settings
 CORS_ALLOW_ALL_ORIGINS = True  # Untuk development, ubah di production
+
+
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    # Tambahkan domain production jika ada
+]
 
 GDAL_LIBRARY_PATH = r"C:\OSGeo4W\bin\gdal312.dll"
 GEOS_LIBRARY_PATH = r"C:\OSGeo4W\bin\geos_c.dll"
