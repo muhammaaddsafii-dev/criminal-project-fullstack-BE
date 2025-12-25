@@ -7,7 +7,7 @@ from .views import (
     CCTVViewSet, FotoCCTVViewSet, KejadianLainnyaViewSet,
     FotoKejadianLainnyaViewSet, statistik_dashboard,
     # Import view baru untuk map
-    AreaViewSet, map_data, area_statistics,
+    AreaViewSet, map_data, area_statistics, get_area_classifications,
 
      # Authentication views
     UserViewSet, login_view, logout_view, current_user,
@@ -57,6 +57,7 @@ urlpatterns = [
     path('map/data/', map_data, name='map-data'),
     path('map/area-statistics/', area_statistics, name='area-statistics-all'),
     path('map/area-statistics/<int:area_id>/', area_statistics, name='area-statistics-detail'),
+    path('map/area-classifications/', get_area_classifications, name='area-classifications'),
 
     # Authentication endpoints
     path('auth/login/', login_view, name='login'),

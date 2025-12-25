@@ -5,7 +5,7 @@ from django.db.models import Q, Count
 from .models import (
     JenisKejahatan, NamaKejahatan, Kecamatan, Desa, Status,
     LaporanKejahatan, FotoLaporanKejahatan, PosKeamanan, FotoPosKeamanan,
-    CCTV, FotoCCTV, KejadianLainnya, FotoKejadianLainnya, User
+    CCTV, FotoCCTV, KejadianLainnya, FotoKejadianLainnya, User, Area
 )
 from .serializers import (
     JenisKejahatanSerializer, NamaKejahatanSerializer, KecamatanSerializer,
@@ -23,9 +23,10 @@ from rest_framework.authtoken.models import Token
 from django.contrib.auth import login, logout
 from django.views.decorators.csrf import csrf_exempt
 from django.db import models
-from rest_framework import permissions 
-
-
+from rest_framework import permissions
+from datetime import datetime, timedelta 
+from django.db.models.functions import TruncMonth
+from django.utils import timezone  
 
 
 class JenisKejahatanViewSet(viewsets.ModelViewSet):
@@ -958,3 +959,470 @@ def change_password_view(request):
         return Response({'message': 'Password berhasil diubah'})
     
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def get_area_classifications(request):
+    """
+    Endpoint untuk mendapatkan klasifikasi semua area berdasarkan jumlah kasus
+    GET /api/map/area-classifications/
+    
+    Returns:
+    {
+        "success": true,
+        "data": {
+            "areas": [
+                {
+                    "id": 1,
+                    "name": "Desa A",
+                    "total_cases": 7,
+                    "classification": "TINGGI",
+                    "color": "#ef4444"
+                },
+                ...
+            ],
+            "thresholds": {
+                "low_max": 2,
+                "medium_max": 5,
+                "high_min": 6
+            }
+        }
+    }
+    """
+    try:
+        # Ambil semua area dengan desa
+        areas = Area.objects.select_related('desa', 'kecamatan').all()
+        
+        # Hitung jumlah kasus per area
+        area_data = []
+        case_counts = []
+        
+        for area in areas:
+            desa_id = area.desa_id
+            total_cases = LaporanKejahatan.objects.filter(desa_id=desa_id).count()
+            
+            area_data.append({
+                'id': area.id,
+                'name': area.desa.nama if area.desa else area.wadmkd,
+                'kecamatan': area.kecamatan.nama if area.kecamatan else area.wadmkc,
+                'total_cases': total_cases,
+                'desa_id': desa_id
+            })
+            case_counts.append(total_cases)
+        
+        # Jika tidak ada data
+        if not case_counts:
+            return Response({
+                'success': True,
+                'data': {
+                    'areas': [],
+                    'thresholds': {'low_max': 0, 'medium_max': 0, 'high_min': 0}
+                }
+            })
+        
+        # Hitung threshold menggunakan percentile (33% dan 67%)
+        import numpy as np
+        case_counts_sorted = sorted(case_counts)
+        
+        # Percentile 33% dan 67%
+        low_threshold = np.percentile(case_counts_sorted, 33)
+        medium_threshold = np.percentile(case_counts_sorted, 67)
+        
+        # Definisikan warna
+        COLOR_LOW = "#10b981"     # Hijau (green-500)
+        COLOR_MEDIUM = "#f59e0b"  # Kuning (amber-500)
+        COLOR_HIGH = "#ef4444"    # Merah (red-500)
+        
+        # Klasifikasikan setiap area
+        for item in area_data:
+            total = item['total_cases']
+            
+            if total <= low_threshold:
+                item['classification'] = 'RENDAH'
+                item['color'] = COLOR_LOW
+                item['level'] = 1
+            elif total <= medium_threshold:
+                item['classification'] = 'SEDANG'
+                item['color'] = COLOR_MEDIUM
+                item['level'] = 2
+            else:
+                item['classification'] = 'TINGGI'
+                item['color'] = COLOR_HIGH
+                item['level'] = 3
+        
+        response_data = {
+            'success': True,
+            'data': {
+                'areas': area_data,
+                'thresholds': {
+                    'low_max': int(low_threshold),
+                    'medium_max': int(medium_threshold),
+                    'high_min': int(medium_threshold) + 1
+                },
+                'statistics': {
+                    'total_areas': len(area_data),
+                    'low_count': sum(1 for a in area_data if a['classification'] == 'RENDAH'),
+                    'medium_count': sum(1 for a in area_data if a['classification'] == 'SEDANG'),
+                    'high_count': sum(1 for a in area_data if a['classification'] == 'TINGGI'),
+                }
+            }
+        }
+        
+        return Response(response_data)
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        
+        return Response({
+            'success': False,
+            'message': 'Terjadi kesalahan server',
+            'error': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# UPDATE fungsi area_statistics yang sudah ada
+# Tambahkan klasifikasi di response
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def area_statistics(request, area_id=None):
+    """
+    Endpoint untuk mendapatkan statistik kriminalitas berdasarkan area/desa
+    UPDATED: Dengan klasifikasi tingkat kriminalitas
+    """
+    try:
+        if not area_id:
+            return Response({
+                'success': False,
+                'message': 'Area ID diperlukan'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Ambil data area
+        try:
+            area = Area.objects.select_related('desa', 'kecamatan').get(id=area_id)
+        except Area.DoesNotExist:
+            return Response({
+                'success': False,
+                'message': 'Area tidak ditemukan'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Ambil desa_id dari area
+        desa_id = area.desa_id
+        
+        # Query laporan kejahatan berdasarkan desa
+        laporan_kejahatan = LaporanKejahatan.objects.filter(
+            desa_id=desa_id
+        ).select_related('jenis_kejahatan', 'nama_kejahatan', 'status')
+        
+        # Total kasus
+        total_cases = laporan_kejahatan.count()
+        
+        # ============ TAMBAHAN: KLASIFIKASI AREA ============
+        # Ambil semua total kasus untuk perhitungan threshold
+        all_areas = Area.objects.all()
+        all_case_counts = []
+        
+        for a in all_areas:
+            count = LaporanKejahatan.objects.filter(desa_id=a.desa_id).count()
+            all_case_counts.append(count)
+        
+        # Hitung threshold
+        import numpy as np
+        all_case_counts_sorted = sorted(all_case_counts)
+        low_threshold = np.percentile(all_case_counts_sorted, 33) if all_case_counts else 0
+        medium_threshold = np.percentile(all_case_counts_sorted, 67) if all_case_counts else 0
+        
+        # Klasifikasi area ini
+        if total_cases <= low_threshold:
+            classification = 'RENDAH'
+            color = '#10b981'  # Hijau
+            level = 1
+        elif total_cases <= medium_threshold:
+            classification = 'SEDANG'
+            color = '#f59e0b'  # Kuning
+            level = 2
+        else:
+            classification = 'TINGGI'
+            color = '#ef4444'  # Merah
+            level = 3
+        # ====================================================
+        
+        # Kasus selesai dan proses
+        solved = laporan_kejahatan.filter(status__nama__icontains='selesai').count()
+        pending = total_cases - solved
+        
+        # Statistik berdasarkan jenis kejahatan
+        by_type = laporan_kejahatan.values(
+            'jenis_kejahatan__nama_jenis_kejahatan'
+        ).annotate(
+            count=Count('id')
+        ).order_by('-count')[:5]
+        
+        by_type_data = [
+            {
+                'name': item['jenis_kejahatan__nama_jenis_kejahatan'],
+                'value': item['count']
+            }
+            for item in by_type
+        ]
+        
+        # Tren bulanan (12 bulan terakhir)
+        twelve_months_ago = timezone.now() - timedelta(days=365)
+        monthly_data = laporan_kejahatan.filter(
+            tanggal_kejadian__gte=twelve_months_ago
+        ).annotate(
+            month=TruncMonth('tanggal_kejadian')
+        ).values('month').annotate(
+            count=Count('id')
+        ).order_by('month')
+        
+        # Format data bulanan
+        month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 
+                      'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des']
+        
+        monthly_trend = []
+        for item in monthly_data:
+            month_num = item['month'].month
+            monthly_trend.append({
+                'month': month_names[month_num - 1],
+                'cases': item['count']
+            })
+        
+        # Kasus terbaru (top 10)
+        recent_cases = laporan_kejahatan.order_by('-tanggal_kejadian')[:10]
+        recent_cases_data = [
+            {
+                'id': case.id,
+                'type': case.nama_kejahatan.nama,
+                'location': case.alamat[:50] + '...' if len(case.alamat) > 50 else case.alamat,
+                'date': case.tanggal_kejadian.isoformat(),
+                'status': case.status.nama
+            }
+            for case in recent_cases
+        ]
+        
+        # Statistik infrastruktur
+        security_posts = PosKeamanan.objects.filter(desa_id=desa_id).count()
+        cctvs = CCTV.objects.filter(desa_id=desa_id).count()
+        
+        # Format response - UPDATED dengan klasifikasi
+        response_data = {
+            'success': True,
+            'data': {
+                'area_info': {
+                    'id': area.id,
+                    'name': area.desa.nama if area.desa else area.wadmkd,
+                    'kecamatan': area.kecamatan.nama if area.kecamatan else area.wadmkc,
+                    'luas': float(area.luas) if area.luas else 0,
+                    # TAMBAHAN: Klasifikasi
+                    'classification': classification,
+                    'classification_color': color,
+                    'classification_level': level
+                },
+                'crime_stats': {
+                    'totalCases': total_cases,
+                    'solved': solved,
+                    'pending': pending,
+                    'byType': by_type_data,
+                    'monthlyTrend': monthly_trend,
+                    'recentCases': recent_cases_data
+                },
+                'infrastructure': {
+                    'security_posts': security_posts,
+                    'cctvs': cctvs
+                },
+                # TAMBAHAN: Info threshold
+                'thresholds': {
+                    'low_max': int(low_threshold),
+                    'medium_max': int(medium_threshold),
+                    'high_min': int(medium_threshold) + 1
+                }
+            }
+        }
+        
+        return Response(response_data)
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        
+        return Response({
+            'success': False,
+            'message': 'Terjadi kesalahan server',
+            'error': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def area_statistics(request, area_id=None):
+    """
+    Endpoint untuk mendapatkan statistik kriminalitas berdasarkan area/desa
+    GET /api/map/area-statistics/<area_id>/
+    
+    Returns:
+    {
+        "success": true,
+        "data": {
+            "area_info": {
+                "id": 1,
+                "name": "Nama Desa",
+                "kecamatan": "Nama Kecamatan",
+                "luas": 10.5
+            },
+            "crime_stats": {
+                "totalCases": 25,
+                "solved": 15,
+                "pending": 10,
+                "byType": [
+                    {"name": "Pencurian", "value": 10},
+                    {"name": "Perampokan", "value": 8}
+                ],
+                "monthlyTrend": [
+                    {"month": "Jan", "cases": 5},
+                    {"month": "Feb", "cases": 8}
+                ],
+                "recentCases": [
+                    {
+                        "id": 1,
+                        "type": "Pencurian",
+                        "location": "Jl. Example",
+                        "date": "2025-01-15",
+                        "status": "Selesai"
+                    }
+                ]
+            },
+            "infrastructure": {
+                "security_posts": 3,
+                "cctvs": 5
+            }
+        }
+    }
+    """
+    try:
+        if not area_id:
+            return Response({
+                'success': False,
+                'message': 'Area ID diperlukan'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Ambil data area
+        try:
+            area = Area.objects.select_related('desa', 'kecamatan').get(id=area_id)
+        except Area.DoesNotExist:
+            return Response({
+                'success': False,
+                'message': 'Area tidak ditemukan'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Ambil desa_id dari area
+        desa_id = area.desa_id
+        
+        # Query laporan kejahatan berdasarkan desa
+        laporan_kejahatan = LaporanKejahatan.objects.filter(
+            desa_id=desa_id
+        ).select_related('jenis_kejahatan', 'nama_kejahatan', 'status')
+        
+        # Total kasus
+        total_cases = laporan_kejahatan.count()
+        
+        # Kasus selesai dan proses
+        solved = laporan_kejahatan.filter(status__nama__icontains='selesai').count()
+        pending = total_cases - solved
+        
+        # Statistik berdasarkan jenis kejahatan
+        by_type = laporan_kejahatan.values(
+            'jenis_kejahatan__nama_jenis_kejahatan'
+        ).annotate(
+            count=Count('id')
+        ).order_by('-count')[:5]
+        
+        by_type_data = [
+            {
+                'name': item['jenis_kejahatan__nama_jenis_kejahatan'],
+                'value': item['count']
+            }
+            for item in by_type
+        ]
+        
+        # Tren bulanan (12 bulan terakhir)
+        from django.db.models.functions import TruncMonth
+        from django.utils import timezone
+        
+        twelve_months_ago = timezone.now() - timedelta(days=365)
+        monthly_data = laporan_kejahatan.filter(
+            tanggal_kejadian__gte=twelve_months_ago
+        ).annotate(
+            month=TruncMonth('tanggal_kejadian')
+        ).values('month').annotate(
+            count=Count('id')
+        ).order_by('month')
+        
+        # Format data bulanan
+        month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 
+                      'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des']
+        
+        monthly_trend = []
+        for item in monthly_data:
+            month_num = item['month'].month
+            monthly_trend.append({
+                'month': month_names[month_num - 1],
+                'cases': item['count']
+            })
+        
+        # Kasus terbaru (top 10)
+        recent_cases = laporan_kejahatan.order_by('-tanggal_kejadian')[:10]
+        recent_cases_data = [
+            {
+                'id': case.id,
+                'type': case.nama_kejahatan.nama,
+                'location': case.alamat[:50] + '...' if len(case.alamat) > 50 else case.alamat,
+                'date': case.tanggal_kejadian.isoformat(),
+                'status': case.status.nama
+            }
+            for case in recent_cases
+        ]
+        
+        # Statistik infrastruktur
+        security_posts = PosKeamanan.objects.filter(desa_id=desa_id).count()
+        cctvs = CCTV.objects.filter(desa_id=desa_id).count()
+        
+        # Format response
+        response_data = {
+            'success': True,
+            'data': {
+                'area_info': {
+                    'id': area.id,
+                    'name': area.desa.nama if area.desa else area.wadmkd,
+                    'kecamatan': area.kecamatan.nama if area.kecamatan else area.wadmkc,
+                    'luas': float(area.luas) if area.luas else 0
+                },
+                'crime_stats': {
+                    'totalCases': total_cases,
+                    'solved': solved,
+                    'pending': pending,
+                    'byType': by_type_data,
+                    'monthlyTrend': monthly_trend,
+                    'recentCases': recent_cases_data
+                },
+                'infrastructure': {
+                    'security_posts': security_posts,
+                    'cctvs': cctvs
+                }
+            }
+        }
+        
+        return Response(response_data)
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        
+        return Response({
+            'success': False,
+            'message': 'Terjadi kesalahan server',
+            'error': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
