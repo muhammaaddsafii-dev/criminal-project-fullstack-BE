@@ -26,7 +26,20 @@ from django.db import models
 from rest_framework import permissions
 from datetime import datetime, timedelta 
 from django.db.models.functions import TruncMonth
-from django.utils import timezone  
+from django.utils import timezone
+from django.http import HttpResponse, FileResponse
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+import zipfile
+import io
+import tempfile
+import os
+from django.contrib.gis.gdal import DataSource, OGRGeometry, SpatialReference
+from django.contrib.gis.gdal import Driver
+import shutil
+
+
 
 
 class JenisKejahatanViewSet(viewsets.ModelViewSet):
@@ -177,6 +190,326 @@ class LaporanKejahatanViewSet(viewsets.ModelViewSet):
         laporan.save()
         serializer = self.get_serializer(laporan)
         return Response(serializer.data)
+    
+
+# Tambahkan action methods ini ke dalam class LaporanKejahatanViewSet
+
+    @action(detail=False, methods=['get'], url_path='download-excel')
+    def download_excel(self, request):
+        """
+        Download data laporan kejahatan dalam format Excel
+        Endpoint: /api/laporan-kejahatan/download-excel/
+        """
+        try:
+            # Get filtered queryset based on query parameters
+            queryset = self.get_queryset()
+            
+            # Debug: Log jumlah data
+            print(f"Download Excel - Total records: {queryset.count()}")
+            
+            # Jika tidak ada data, return error response
+            if not queryset.exists():
+                return Response(
+                    {'error': 'Tidak ada data untuk diunduh dengan filter yang dipilih'}, 
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Create workbook
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Data Kriminalitas"
+            
+            # Define styles
+            header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+            header_font = Font(bold=True, color="FFFFFF", size=12)
+            border = Border(
+                left=Side(style='thin'),
+                right=Side(style='thin'),
+                top=Side(style='thin'),
+                bottom=Side(style='thin')
+            )
+            
+            # Headers
+            headers = [
+                'ID', 'Nama Pelapor', 'Jenis Kejahatan', 'Nama Kejahatan',
+                'Tanggal Kejadian', 'Waktu Kejadian', 'Kecamatan', 'Desa',
+                'Alamat', 'Deskripsi', 'Status', 'Latitude', 'Longitude',
+                'Approval', 'Tanggal Dibuat'
+            ]
+            
+            # Write headers
+            for col_num, header in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col_num, value=header)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal='center', vertical='center')
+                cell.border = border
+            
+            # Write data
+            row_num = 2
+            for laporan in queryset:
+                # Get coordinates
+                latitude = laporan.lokasi.y if laporan.lokasi else ''
+                longitude = laporan.lokasi.x if laporan.lokasi else ''
+                
+                row_data = [
+                    laporan.id,
+                    laporan.nama_pelapor,
+                    laporan.jenis_kejahatan.nama_jenis_kejahatan,
+                    laporan.nama_kejahatan.nama,
+                    laporan.tanggal_kejadian.strftime('%d-%m-%Y'),
+                    laporan.waktu_kejadian.strftime('%H:%M'),
+                    laporan.kecamatan.nama,
+                    laporan.desa.nama,
+                    laporan.alamat,
+                    laporan.deskripsi,
+                    laporan.status.nama,
+                    latitude,
+                    longitude,
+                    'Ya' if laporan.is_approval else 'Tidak',
+                    laporan.created_at.strftime('%d-%m-%Y %H:%M')
+                ]
+                
+                for col_num, value in enumerate(row_data, 1):
+                    cell = ws.cell(row=row_num, column=col_num, value=value)
+                    cell.border = border
+                    cell.alignment = Alignment(vertical='center', wrap_text=True)
+                
+                row_num += 1
+            
+            # Adjust column widths
+            column_widths = [8, 25, 20, 25, 15, 12, 15, 15, 30, 40, 15, 12, 12, 10, 18]
+            for i, width in enumerate(column_widths, 1):
+                ws.column_dimensions[get_column_letter(i)].width = width
+            
+            # Freeze first row
+            ws.freeze_panes = 'A2'
+            
+            # Save to response
+            response = HttpResponse(
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            response['Content-Disposition'] = f'attachment; filename=data_kriminalitas_{timezone.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+            wb.save(response)
+            
+            print(f"Download Excel - Success! Total rows: {row_num - 2}")
+            return response
+            
+        except Exception as e:
+            print(f"Download Excel - Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {'error': f'Gagal mengunduh Excel: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['get'], url_path='download-geojson')
+    def download_geojson(self, request):
+        """
+        Download data laporan kejahatan dalam format GeoJSON
+        Endpoint: /api/laporan-kejahatan/download-geojson/
+        """
+        try:
+            # Get filtered queryset based on query parameters
+            queryset = self.get_queryset()
+            
+            # Debug: Log jumlah data
+            print(f"Download GeoJSON - Total records: {queryset.count()}")
+            
+            # Build GeoJSON structure
+            features = []
+            for laporan in queryset:
+                if laporan.lokasi:  # Only include records with location
+                    feature = {
+                        "type": "Feature",
+                        "geometry": {
+                            "type": "Point",
+                            "coordinates": [laporan.lokasi.x, laporan.lokasi.y]
+                        },
+                        "properties": {
+                            "id": laporan.id,
+                            "nama_pelapor": laporan.nama_pelapor,
+                            "jenis_kejahatan": laporan.jenis_kejahatan.nama_jenis_kejahatan,
+                            "nama_kejahatan": laporan.nama_kejahatan.nama,
+                            "tanggal_kejadian": laporan.tanggal_kejadian.strftime('%Y-%m-%d'),
+                            "waktu_kejadian": laporan.waktu_kejadian.strftime('%H:%M:%S'),
+                            "kecamatan": laporan.kecamatan.nama,
+                            "desa": laporan.desa.nama,
+                            "alamat": laporan.alamat,
+                            "deskripsi": laporan.deskripsi,
+                            "status": laporan.status.nama,
+                            "is_approval": laporan.is_approval,
+                            "created_at": laporan.created_at.strftime('%Y-%m-%d %H:%M:%S')
+                        }
+                    }
+                    features.append(feature)
+            
+            print(f"Download GeoJSON - Total features with location: {len(features)}")
+            
+            geojson = {
+                "type": "FeatureCollection",
+                "name": "Data Kriminalitas",
+                "crs": {
+                    "type": "name",
+                    "properties": {
+                        "name": "urn:ogc:def:crs:OGC:1.3:CRS84"
+                    }
+                },
+                "features": features
+            }
+            
+            # Create response
+            response = HttpResponse(
+                json.dumps(geojson, indent=2, ensure_ascii=False),
+                content_type='application/geo+json'
+            )
+            response['Content-Disposition'] = f'attachment; filename=data_kriminalitas_{timezone.now().strftime("%Y%m%d_%H%M%S")}.geojson'
+            
+            print(f"Download GeoJSON - Success!")
+            return response
+            
+        except Exception as e:
+            print(f"Download GeoJSON - Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {'error': f'Gagal mengunduh GeoJSON: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['get'], url_path='download-shapefile')
+    def download_shapefile(self, request):
+        """
+        Download data laporan kejahatan dalam format Shapefile (zipped)
+        Endpoint: /api/laporan-kejahatan/download-shapefile/
+        """
+        try:
+            # Get filtered queryset based on query parameters
+            queryset = self.get_queryset().filter(lokasi__isnull=False)
+            
+            print(f"Download Shapefile - Total records with location: {queryset.count()}")
+            
+            if not queryset.exists():
+                return Response(
+                    {'error': 'Tidak ada data dengan lokasi untuk diunduh'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Create temporary directory for shapefile
+            temp_dir = tempfile.mkdtemp()
+            shapefile_name = f'data_kriminalitas_{timezone.now().strftime("%Y%m%d_%H%M%S")}'
+            shapefile_path = os.path.join(temp_dir, shapefile_name)
+            
+            try:
+                # Create shapefile using GDAL
+                driver = Driver('ESRI Shapefile')
+                ds = driver.CreateDataSource(shapefile_path + '.shp')
+                
+                # Create spatial reference (WGS84)
+                srs = SpatialReference(4326)
+                
+                # Create layer
+                layer = ds.CreateLayer('kriminalitas', srs, 1)  # 1 = wkbPoint
+                
+                # Define fields
+                from django.contrib.gis.gdal import OGRFieldDefn
+                fields = [
+                    ('id', 0),  # 0 = OFTInteger
+                    ('nama_pelap', 2),  # 2 = OFTString
+                    ('jenis_krj', 2),
+                    ('nama_krj', 2),
+                    ('tgl_kjdn', 2),
+                    ('waktu_kjdn', 2),
+                    ('kecamatan', 2),
+                    ('desa', 2),
+                    ('alamat', 2),
+                    ('deskripsi', 2),
+                    ('status', 2),
+                    ('approval', 2),
+                    ('created_at', 2),
+                ]
+                
+                for field_name, field_type in fields:
+                    field_defn = OGRFieldDefn(field_name, field_type)
+                    if field_type == 2:  # String
+                        field_defn.width = 254
+                    layer.create_field(field_defn)
+                
+                # Add features
+                feature_count = 0
+                for laporan in queryset:
+                    # Create feature
+                    feature = layer.feature_defn
+                    feat = feature.create()
+                    
+                    # Set geometry
+                    geom = OGRGeometry('POINT({} {})'.format(
+                        laporan.lokasi.x, 
+                        laporan.lokasi.y
+                    ))
+                    feat.geom = geom
+                    
+                    # Set attributes
+                    feat['id'] = laporan.id
+                    feat['nama_pelap'] = laporan.nama_pelapor[:254]
+                    feat['jenis_krj'] = laporan.jenis_kejahatan.nama_jenis_kejahatan[:254]
+                    feat['nama_krj'] = laporan.nama_kejahatan.nama[:254]
+                    feat['tgl_kjdn'] = laporan.tanggal_kejadian.strftime('%Y-%m-%d')
+                    feat['waktu_kjdn'] = laporan.waktu_kejadian.strftime('%H:%M:%S')
+                    feat['kecamatan'] = laporan.kecamatan.nama[:254]
+                    feat['desa'] = laporan.desa.nama[:254]
+                    feat['alamat'] = laporan.alamat[:254]
+                    feat['deskripsi'] = laporan.deskripsi[:254]
+                    feat['status'] = laporan.status.nama[:254]
+                    feat['approval'] = 'Ya' if laporan.is_approval else 'Tidak'
+                    feat['created_at'] = laporan.created_at.strftime('%Y-%m-%d')
+                    
+                    # Add feature to layer
+                    layer.add(feat)
+                    feature_count += 1
+                
+                print(f"Download Shapefile - Added {feature_count} features")
+                
+                # Close datasource to flush to disk
+                ds = None
+                
+                # Create zip file
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    # Add all shapefile components
+                    for ext in ['.shp', '.shx', '.dbf', '.prj', '.cpg']:
+                        file_path = shapefile_path + ext
+                        if os.path.exists(file_path):
+                            zip_file.write(file_path, shapefile_name + ext)
+                            print(f"Added to zip: {shapefile_name}{ext}")
+                
+                # Clean up temp directory
+                shutil.rmtree(temp_dir)
+                
+                # Return zip file
+                zip_buffer.seek(0)
+                response = HttpResponse(zip_buffer.read(), content_type='application/zip')
+                response['Content-Disposition'] = f'attachment; filename={shapefile_name}.zip'
+                
+                print(f"Download Shapefile - Success!")
+                return response
+                
+            except Exception as e:
+                # Clean up on error
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                raise e
+            
+        except Exception as e:
+            print(f"Download Shapefile - Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {'error': f'Gagal mengunduh Shapefile: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
 
 
 class FotoLaporanKejahatanViewSet(viewsets.ModelViewSet):
